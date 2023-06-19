@@ -663,6 +663,8 @@ extern void __wait_lookup_done (void) attribute_hidden;
 int __pthread_attr_extension (struct pthread_attr *attr) attribute_hidden
   __attribute_warn_unused_result__;
 
+void __pthread_cancel_install_handler (void) attribute_hidden;
+
 #ifdef SHARED
 # define PTHREAD_STATIC_FN_REQUIRE(name)
 #else

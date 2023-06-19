@@ -67,17 +67,9 @@ sigcancel_handler (int sig, siginfo_t *si, void *ctx)
     }
 }
 
-int
-__pthread_cancel (pthread_t th)
+void
+__pthread_cancel_install_handler (void)
 {
-  volatile struct pthread *pd = (volatile struct pthread *) th;
-
-  if (pd->tid == 0)
-    /* The thread has already exited on the kernel side.  Its outcome
-       (regular exit, other cancelation) has already been
-       determined.  */
-    return 0;
-
   static int init_sigcancel = 0;
   if (atomic_load_relaxed (&init_sigcancel) == 0)
     {
@@ -92,6 +84,20 @@ __pthread_cancel (pthread_t th)
       __libc_sigaction (SIGCANCEL, &sa, NULL);
       atomic_store_relaxed (&init_sigcancel, 1);
     }
+}
+
+int
+__pthread_cancel (pthread_t th)
+{
+  volatile struct pthread *pd = (volatile struct pthread *) th;
+
+  if (pd->tid == 0)
+    /* The thread has already exited on the kernel side.  Its outcome
+       (regular exit, other cancelation) has already been
+       determined.  */
+    return 0;
+
+  __pthread_cancel_install_handler ();
 
 #ifdef SHARED
   /* Trigger an error if libgcc_s cannot be loaded.  */

@@ -1,5 +1,5 @@
 /* Check if the thread created by POSIX timer using SIGEV_THREAD is
-   cancellable.
+   asynchronously cancellable.
    Copyright (C) 2020-2023 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
@@ -27,6 +27,8 @@
 #include <support/test-driver.h>
 #include <support/xthread.h>
 
+#include <sys/syscall.h>
+
 static pthread_barrier_t barrier;
 static pthread_t timer_thread;
 static bool cancelled = false;
@@ -35,21 +37,19 @@ static void
 cl (void *arg)
 {
   cancelled = true;
-  xpthread_barrier_wait (&barrier);  /* 2 */
+  xpthread_barrier_wait (&barrier);  /* 1 */
 }
 
 static void
 thread_handler (union sigval sv)
 {
   timer_thread = pthread_self ();
+  pthread_setcanceltype (PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
   xpthread_barrier_wait (&barrier);  /* 0 */
 
-  xpthread_barrier_wait (&barrier);  /* 1 */
-
   pthread_cleanup_push (cl, NULL);
-  while (1)
-    clock_nanosleep (CLOCK_REALTIME, 0, &(struct timespec) { 1, 0 }, NULL);
+  for (;;);
   pthread_cleanup_pop (0);
 }
 
@@ -74,12 +74,8 @@ do_test (void)
 
   xpthread_cancel (timer_thread);
 
-  /* Sync to get the pending cancellation to act on next cancellation
-     entrypoint (clock_nanosleep).  */
-  xpthread_barrier_wait (&barrier);  /* 1 */
-
   /* Sync with the cancellation cleanup handler.  */
-  xpthread_barrier_wait (&barrier);  /* 2 */
+  xpthread_barrier_wait (&barrier);  /* 1 */
 
   TEST_COMPARE (cancelled, true);
 
