@@ -95,7 +95,7 @@ do_dlopen (void *ptr)
   /* Open and relocate the shared object.  */
   args->map = GLRO(dl_open) (args->name, args->mode, args->caller_dlopen,
 			     __LM_ID_CALLER, __libc_argc, __libc_argv,
-			     __environ);
+			     __environ, -1L);
 }
 
 static void

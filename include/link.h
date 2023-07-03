@@ -322,6 +322,11 @@ struct link_map
 
     unsigned long long int l_serial;
 
+    // nima
+    int l_ns_universal; // 0 for unknown, 1 for regular, 2 for universal
+    Lmid_t l_ns_inner;
+    struct link_map * iparent;
+
     /* Audit information.  This array apparent must be the last in the
        structure.  Never add something after it.  */
     struct auditstate

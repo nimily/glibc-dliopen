@@ -37,6 +37,7 @@
 #include <dl-dst.h>
 #include <dl-prop.h>
 
+#include <dl-hash.h>
 
 /* We must be careful not to leave us in an inconsistent state.  Thus we
    catch any error and re-raise it after cleaning up.  */
@@ -50,6 +51,7 @@ struct dl_open_args
   struct link_map *map;
   /* Namespace ID.  */
   Lmid_t nsid;
+  Lmid_t nsid_inner;
   /* Original parameters to the program and the current environment.  */
   int argc;
   char **argv;
@@ -214,8 +216,8 @@ dl_open_worker (void *a)
 
   /* Load the named object.  */
   struct link_map *new;
-  args->map = new = _dl_map_object (call_map, file, lt_loaded, 0,
-				    mode | __RTLD_CALLMAP, args->nsid);
+  args->map = new = _dl_map_object_with_nsid_inner (call_map, file, lt_loaded, 0,
+				    mode | __RTLD_CALLMAP, args->nsid, args->nsid_inner);
 
   /* If the pointer returned is NULL this means the RTLD_NOLOAD flag is
      set and the object is not already loaded.  */
@@ -527,7 +529,7 @@ TLS generation counter wrapped!  Please report this."));
 
 void *
 _dl_open (const char *file, int mode, const void *caller_dlopen, Lmid_t nsid,
-	  int argc, char *argv[], char *env[])
+	  int argc, char *argv[], char *env[], Lmid_t nsid_inner)
 {
   if ((mode & RTLD_BINDING_MASK) == 0)
     /* One of the flags must be set.  */
@@ -580,6 +582,7 @@ no more namespaces available for dlmopen()"));
   args.caller_dlopen = caller_dlopen;
   args.map = NULL;
   args.nsid = nsid;
+  args.nsid_inner = nsid_inner;
   args.argc = argc;
   args.argv = argv;
   args.env = env;
@@ -652,4 +655,172 @@ _dl_show_scope (struct link_map *l, int from)
   else
     _dl_debug_printf (" no scope\n");
   _dl_debug_printf ("\n");
+}
+struct universal_link {
+  struct universal_link * next;
+  struct link_map * map;
+};
+
+static Lmid_t last_inner_nsid = 0L;
+
+static struct universal_link * univeral_head = NULL;
+
+static const char * universal_root = NULL;
+
+Lmid_t _dl_zzz_get_new_inner_nsid(void) {
+  return ++last_inner_nsid;
+}
+
+void _dl_zzz_add_to_universals(struct link_map * map) {
+  if (!_dl_zzz_is_universal_map(map)) {
+    return;
+  }
+
+  struct universal_link * cur = univeral_head;
+
+  bool is_new = true;
+  while (cur != NULL) {
+    if (cur -> map == map) {
+      is_new = false;
+      break;
+    }
+
+    cur = cur -> next;
+  }
+
+  if (is_new) {
+    struct universal_link * new_head = calloc(1, sizeof(struct universal_link));
+
+    new_head -> next = univeral_head;
+    new_head -> map = map;
+
+    univeral_head = new_head;
+
+    if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+      _dl_debug_printf ("Adding to universals: %s [%lu, %lu]\n",
+            map -> l_name, map -> l_ns_inner, map -> l_ns_universal);
+  }
+}
+
+bool
+_dl_zzz_is_universal_map(struct link_map * map) {
+  if (map == NULL) return false;
+
+#ifdef SHARED
+  if (GLRO(dl_zzz_universal_root) == NULL) {
+    /*
+     * ZZZ: this fixes the segfault that happens when running `ld.so kinetic`
+     *
+     * In the case that we run `ld.so kinetic` instead of `kinetic`, the link map
+     * corresonding to `kinetic` is created before `GLRO(dl_zzz_universal_root)`
+     * is set. However, this is the only one created before that and it should
+     * never be universal anyways. So, we can safely ignore that case.
+     *
+     */
+    return false;
+  }
+  if (map -> l_ns_universal == 0) {
+    if (starts_with(map->l_name, GLRO(dl_zzz_universal_root))) {
+      map -> l_ns_universal = 2;
+    } else {
+      map -> l_ns_universal = 1;
+    }
+  }
+#else
+  struct dl_exception exception;
+  _dl_signal_exception (ENOTSUP, &exception, "Only shared ld.so is allowed for dliopen to work.");
+#endif
+
+  return map -> l_ns_universal == 2;
+}
+
+
+bool
+_dl_zzz_is_universal_sym(const char * const name, uint_fast32_t new_hash) {
+  struct universal_link * cur = univeral_head;
+  struct link_map * map = NULL;
+
+  while (cur != NULL) {
+    map = cur -> map;
+    cur = cur -> next;
+
+    /*   start here   */
+
+    /* If the hash table is empty there is nothing to do here.  */
+    if (map->l_nbuckets == 0)
+      continue;
+
+    Elf_Symndx symidx;
+    int num_versions = 0;
+    const ElfW(Sym) *versioned_sym = NULL;
+
+    /* The tables for this map.  */
+    const ElfW(Sym) *symtab = (const void *) D_PTR (map, l_info[DT_SYMTAB]);
+    const char *strtab = (const void *) D_PTR (map, l_info[DT_STRTAB]);
+
+    const ElfW(Addr) *bitmask = map->l_gnu_bitmask;
+    if (__glibc_likely (bitmask != NULL)) {
+	    ElfW(Addr) bitmask_word
+	      = bitmask[(new_hash / __ELF_NATIVE_CLASS)
+		        & map->l_gnu_bitmask_idxbits];
+
+      unsigned int hashbit1 = new_hash & (__ELF_NATIVE_CLASS - 1);
+      unsigned int hashbit2 = ((new_hash >> map->l_gnu_shift)
+            & (__ELF_NATIVE_CLASS - 1));
+
+      if (__glibc_unlikely ((bitmask_word >> hashbit1)
+          & (bitmask_word >> hashbit2) & 1)) {
+
+        Elf32_Word bucket = map->l_gnu_buckets[new_hash
+						     % map->l_nbuckets];
+	      if (bucket != 0) {
+          const Elf32_Word *hasharr = &map->l_gnu_chain_zero[bucket];
+
+          do {
+            if (((*hasharr ^ new_hash) >> 1) == 0) {
+              symidx = hasharr - map->l_gnu_chain_zero;
+
+              if (strcmp (strtab + symtab[symidx].st_name, name) == 0) return true;
+            }
+          } while ((*hasharr++ & 1u) == 0);
+        }
+	    }
+      /* No symbol found.  */
+      symidx = SHN_UNDEF;
+   } else {
+      // if (*old_hash == 0xffffffff)
+      uint_fast32_t old_hash = _dl_elf_hash (name);
+
+      /* Use the old SysV-style hash table.  Search the appropriate
+        hash bucket in this object's symbol table for a definition
+        for the same symbol name.  */
+      for (symidx = map->l_buckets[old_hash % map->l_nbuckets];
+          symidx != STN_UNDEF;
+          symidx = map->l_chain[symidx]) {
+
+          if (strcmp (strtab + symtab[symidx].st_name, name) == 0) return true;
+	    }
+   }
+  }
+  return false;
+
+}
+
+bool _dl_zzz_has_visibility(const struct link_map * caller, const struct link_map * callee) {
+    bool result = false;
+
+    if (_dl_zzz_is_universal_map(callee)) {
+		  // it's global, just let it happen
+      result = true;
+    } else if (callee -> l_ns_universal == 1) {
+      result = (
+        (caller -> l_ns_inner == callee -> l_ns_inner) ||
+        (caller == callee -> iparent)
+      );
+	  } else {
+      // shouldn't happen.
+	    result = false;
+	  }
+
+  return result;
 }

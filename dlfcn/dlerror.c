@@ -251,7 +251,9 @@ static struct dlfcn_hook _dlfcn_hooks =
     .dladdr = __dladdr,
     .dladdr1 = __dladdr1,
     .dlinfo = __dlinfo,
-    .dlmopen = __dlmopen
+    .dlmopen = __dlmopen,
+    .dlopen_with_args = __dlopen_with_args,
+    .dliopen = __dliopen,
   };
 
 void

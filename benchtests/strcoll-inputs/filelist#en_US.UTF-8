@@ -9748,9 +9748,11 @@ modcxaatexit.c
 moddummy2.c
 tst-dlinfo.c
 dlmopen.c
+dliopen.c
 modstatic.c
 modstatic2.c
 sdlmopen.c
+sdliopen.c
 bug-dlsym1-lib2.c
 dladdr1.c
 tststatic4.c

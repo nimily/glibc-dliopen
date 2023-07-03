@@ -39,6 +39,7 @@
 #include <hp-timing.h>
 #include <tls.h>
 
+#define nima
 __BEGIN_DECLS
 
 #define VERSYMIDX(sym)	(DT_NUM + DT_THISPROCNUM + DT_VERSIONTAGIDX (sym))
@@ -575,6 +576,9 @@ struct rtld_global_ro
      below.  */
   EXTERN struct r_search_path_elem *_dl_init_all_dirs;
 
+  EXTERN const char * _dl_zzz_universal_root;
+
+
 #ifdef NEED_DL_SYSINFO
   /* Syscall handling improvements.  This is very specific to x86.  */
   EXTERN uintptr_t _dl_sysinfo;
@@ -602,12 +606,16 @@ struct rtld_global_ro
   void (*_dl_debug_printf) (const char *, ...)
        __attribute__ ((__format__ (__printf__, 1, 2)));
   void (*_dl_mcount) (ElfW(Addr) frompc, ElfW(Addr) selfpc);
+  lookup_t (*_dl_lookup_symbol_x_with_looker) (const char *, struct link_map *,
+				   const ElfW(Sym) **, struct r_scope_elem *[],
+				   const struct r_found_version *, int, int,
+				   struct link_map *, struct link_map *);
   lookup_t (*_dl_lookup_symbol_x) (const char *, struct link_map *,
 				   const ElfW(Sym) **, struct r_scope_elem *[],
 				   const struct r_found_version *, int, int,
 				   struct link_map *);
   void *(*_dl_open) (const char *file, int mode, const void *caller_dlopen,
-		     Lmid_t nsid, int argc, char *argv[], char *env[]);
+		     Lmid_t nsid, int argc, char *argv[], char *env[], Lmid_t nsid_inner);
   void (*_dl_close) (void *map);
   void *(*_dl_tls_get_addr_soft) (struct link_map *);
 #ifdef HAVE_DL_DISCOVER_OSVERSION
@@ -617,6 +625,10 @@ struct rtld_global_ro
   /* List of auditing interfaces.  */
   struct audit_ifaces *_dl_audit;
   unsigned int _dl_naudit;
+
+  Lmid_t (*_dl_zzz_get_new_inner_nsid)(void);
+
+  void (*_dl_zzz_add_to_universals)(struct link_map * map);
 };
 # define __rtld_global_attribute__
 # if IS_IN (rtld)
@@ -860,6 +872,11 @@ libc_hidden_proto (_dl_catch_exception)
 /* Open the shared object NAME and map in its segments.
    LOADER's DT_RPATH is used in searching for NAME.
    If the object is already opened, returns its existing map.  */
+extern struct link_map *_dl_map_object_with_nsid_inner (struct link_map *loader,
+					const char *name,
+					int type, int trace_mode, int mode,
+					Lmid_t nsid, Lmid_t nsid_inner) attribute_hidden;
+
 extern struct link_map *_dl_map_object (struct link_map *loader,
 					const char *name,
 					int type, int trace_mode, int mode,
@@ -909,6 +926,15 @@ enum
   };
 
 /* Lookup versioned symbol.  */
+extern lookup_t _dl_lookup_symbol_x_with_looker (const char *undef,
+				     struct link_map *undef_map,
+				     const ElfW(Sym) **sym,
+				     struct r_scope_elem *symbol_scope[],
+				     const struct r_found_version *version,
+				     int type_class, int flags,
+				     struct link_map *skip_map, struct link_map *looker)
+     attribute_hidden;
+
 extern lookup_t _dl_lookup_symbol_x (const char *undef,
 				     struct link_map *undef_map,
 				     const ElfW(Sym) **sym,
@@ -924,6 +950,11 @@ extern void _dl_add_to_namespace_list (struct link_map *new, Lmid_t nsid)
      attribute_hidden;
 
 /* Allocate a `struct link_map' for a new object being loaded.  */
+extern struct link_map *_dl_new_object_with_nsid_inner (char *realname, const char *libname,
+					int type, struct link_map *loader,
+					int mode, Lmid_t nsid, Lmid_t nsid_inner)
+     attribute_hidden;
+
 extern struct link_map *_dl_new_object (char *realname, const char *libname,
 					int type, struct link_map *loader,
 					int mode, Lmid_t nsid)
@@ -1115,7 +1146,7 @@ extern char *_dl_dst_substitute (struct link_map *l, const char *name,
    hasn't already been run.  MODE is as for `dlopen' (see <dlfcn.h>).  If
    the object is already opened, returns its existing map.  */
 extern void *_dl_open (const char *name, int mode, const void *caller,
-		       Lmid_t nsid, int argc, char *argv[], char *env[])
+		       Lmid_t nsid, int argc, char *argv[], char *env[], Lmid_t nsid_inner)
      attribute_hidden;
 
 /* Free or queue for freeing scope OLD.  If other threads might be
@@ -1167,6 +1198,16 @@ rtld_active (void)
   return GLRO(dl_init_all_dirs) != NULL;
 }
 #endif
+
+extern Lmid_t _dl_zzz_get_new_inner_nsid(void);
+
+extern void _dl_zzz_add_to_universals(struct link_map * map);
+
+extern bool _dl_zzz_is_universal_map(struct link_map * map);
+
+extern bool _dl_zzz_is_universal_sym(const char * const name, uint_fast32_t new_hash);
+
+extern bool _dl_zzz_has_visibility(const struct link_map * caller, const struct link_map * callee);
 
 __END_DECLS
 

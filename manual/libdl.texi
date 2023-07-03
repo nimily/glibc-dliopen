@@ -5,6 +5,7 @@
 @c dlerror
 @c dlinfo
 @c dlmopen
+@c dliopen
 @c dlopen
 @c dlsym
 @c dlvsym

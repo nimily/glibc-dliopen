@@ -54,8 +54,8 @@ _dl_add_to_namespace_list (struct link_map *new, Lmid_t nsid)
 /* Allocate a `struct link_map' for a new object being loaded,
    and enter it into the _dl_loaded list.  */
 struct link_map *
-_dl_new_object (char *realname, const char *libname, int type,
-		struct link_map *loader, int mode, Lmid_t nsid)
+_dl_new_object_with_nsid_inner (char *realname, const char *libname, int type,
+		struct link_map *loader, int mode, Lmid_t nsid, Lmid_t nsid_inner)
 {
   size_t libname_len = strlen (libname) + 1;
   struct link_map *new;
@@ -103,6 +103,8 @@ _dl_new_object (char *realname, const char *libname, int type,
   new->l_tls_offset = NO_TLS_OFFSET;
 #endif
   new->l_ns = nsid;
+  new->l_ns_inner = nsid_inner;
+  new->l_ns_universal = 0;
 
 #ifdef SHARED
   for (unsigned int cnt = 0; cnt < naudit; ++cnt)
@@ -224,4 +226,15 @@ _dl_new_object (char *realname, const char *libname, int type,
     }
 
   return new;
+}
+
+struct link_map *
+_dl_new_object (char *realname, const char *libname, int type,
+		struct link_map *loader, int mode, Lmid_t nsid)
+{
+  Lmid_t nsid_inner = 0;
+  if (loader != NULL) {
+    nsid_inner = loader -> l_ns_inner;
+  }
+  return _dl_new_object_with_nsid_inner (realname, libname, type, loader, mode, nsid, nsid_inner);
 }

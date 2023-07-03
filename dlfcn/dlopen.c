@@ -42,6 +42,7 @@ struct dlopen_args
   void *new;
   /* Address of the caller.  */
   const void *caller;
+  Lmid_t nsid_inner;
 };
 
 
@@ -66,22 +67,23 @@ dlopen_doit (void *a)
   args->new = GLRO(dl_open) (args->file ?: "", args->mode | __RTLD_DLOPEN,
 			     args->caller,
 			     args->file == NULL ? LM_ID_BASE : NS,
-			     __dlfcn_argc, __dlfcn_argv, __environ);
+			     __dlfcn_argc, __dlfcn_argv, __environ, args->nsid_inner);
 }
 
 
 void *
-__dlopen (const char *file, int mode DL_CALLER_DECL)
+__dlopen_with_args (const char *file, int mode, Lmid_t nsid_inner, void * caller)
 {
 # ifdef SHARED
   if (!rtld_active ())
-    return _dlfcn_hook->dlopen (file, mode, DL_CALLER);
+    return _dlfcn_hook->dlopen_with_args (file, mode, nsid_inner, caller);
 # endif
 
   struct dlopen_args args;
   args.file = file;
   args.mode = mode;
-  args.caller = DL_CALLER;
+  args.caller = caller;
+  args.nsid_inner = nsid_inner;
 
 # ifdef SHARED
   return _dlerror_run (dlopen_doit, &args) ? NULL : args.new;
@@ -95,6 +97,14 @@ __dlopen (const char *file, int mode DL_CALLER_DECL)
   return args.new;
 # endif
 }
+
+
+void *
+__dlopen (const char *file, int mode DL_CALLER_DECL)
+{
+  return __dlopen_with_args(file, mode, -1L, DL_CALLER);
+}
+
 # ifdef SHARED
 #  include <shlib-compat.h>
 strong_alias (__dlopen, __dlopen_check)

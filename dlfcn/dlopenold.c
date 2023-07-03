@@ -54,7 +54,7 @@ dlopen_doit (void *a)
   args->new = GLRO(dl_open) (args->file ?: "", args->mode | __RTLD_DLOPEN,
 			     args->caller,
 			     args->file == NULL ? LM_ID_BASE : NS,
-			     __dlfcn_argc, __dlfcn_argv, __environ);
+			     __dlfcn_argc, __dlfcn_argv, __environ, -1L);
 }
 
 extern void *__dlopen_nocheck (const char *file, int mode);

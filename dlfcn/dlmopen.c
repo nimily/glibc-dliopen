@@ -71,7 +71,7 @@ dlmopen_doit (void *a)
   args->new = GLRO(dl_open) (args->file ?: "", args->mode | __RTLD_DLOPEN,
 			     args->caller,
 			     args->nsid, __dlfcn_argc, __dlfcn_argv,
-			     __environ);
+			     __environ, -1);
 }
 
 

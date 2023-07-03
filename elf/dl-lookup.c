@@ -31,6 +31,9 @@
 
 #include <assert.h>
 
+#include <libgen.h>
+
+
 /* Return nonzero if check_match should consider SYM to fail to match a
    symbol reference for some machine-specific reason.  */
 #ifndef ELF_MACHINE_SYM_NO_MATCH
@@ -326,6 +329,18 @@ do_lookup_unique (const char *undef_name, uint_fast32_t new_hash,
   result->m = (struct link_map *) map;
 }
 
+
+bool
+starts_with(char * ch, char *p) {
+	int n = strlen(p);
+	for (int i = 0;i < n; ++i) {
+		if(ch[i] != p[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
 /* Inner part of the lookup functions.  We return a value > 0 if we
    found the symbol, the value 0 if nothing is found and < 0 if
    something bad happened.  */
@@ -335,7 +350,7 @@ do_lookup_x (const char *undef_name, uint_fast32_t new_hash,
 	     unsigned long int *old_hash, const ElfW(Sym) *ref,
 	     struct sym_val *result, struct r_scope_elem *scope, size_t i,
 	     const struct r_found_version *const version, int flags,
-	     struct link_map *skip, int type_class, struct link_map *undef_map)
+	     struct link_map *skip, int type_class, struct link_map *undef_map, struct link_map *looker)
 {
   size_t n = scope->r_nlist;
   /* Make sure we read the value before proceeding.  Otherwise we
@@ -344,6 +359,13 @@ do_lookup_x (const char *undef_name, uint_fast32_t new_hash,
      protected by GSCOPE.  A read barrier here might be to expensive.  */
   __asm volatile ("" : "+r" (n), "+m" (scope->r_list));
   struct link_map **list = scope->r_list;
+  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_SYMBOLS))
+	_dl_debug_printf ("(ZZZ) searching for symbol=%s because of %s [l_ns = %lu, l_ns_inner = %lu]\n",
+				undef_name, DSO_FILENAME (undef_map->l_name),
+				undef_map->l_ns,
+				undef_map->l_ns_inner);
+
+  bool usym = _dl_zzz_is_universal_sym(undef_name, new_hash);
 
   do
     {
@@ -363,9 +385,14 @@ do_lookup_x (const char *undef_name, uint_fast32_t new_hash,
 
       /* Print some debugging info if wanted.  */
       if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_SYMBOLS))
-	_dl_debug_printf ("symbol=%s;  lookup in file=%s [%lu]\n",
+	_dl_debug_printf ("symbol=%s;  lookup in file=%s [%lu, (ZZZ) l_ns_inner = %lu]\n",
 			  undef_name, DSO_FILENAME (map->l_name),
-			  map->l_ns);
+			  map->l_ns,
+			  map->l_ns_inner);
+
+	if (!usym && !_dl_zzz_has_visibility(looker?: undef_map, map)) {
+		continue;
+	}
 
       /* If the hash table is empty there is nothing to do here.  */
       if (map->l_nbuckets == 0)
@@ -773,7 +800,7 @@ static void
 _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
 		    const ElfW(Sym) **ref, struct sym_val *value,
 		    const struct r_found_version *version, int type_class,
-		    int protected);
+		    int protected, struct link_map *looker);
 
 
 /* Search loaded objects' symbol tables for a definition of the symbol
@@ -783,11 +810,11 @@ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
    or in any function which gets called.  If this would happen the audit
    code might create a thread which can throw off all the scope locking.  */
 lookup_t
-_dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
+_dl_lookup_symbol_x_with_looker (const char *undef_name, struct link_map *undef_map,
 		     const ElfW(Sym) **ref,
 		     struct r_scope_elem *symbol_scope[],
 		     const struct r_found_version *version,
-		     int type_class, int flags, struct link_map *skip_map)
+		     int type_class, int flags, struct link_map *skip_map, struct link_map *looker)
 {
   const uint_fast32_t new_hash = dl_new_hash (undef_name);
   unsigned long int old_hash = 0xffffffff;
@@ -813,7 +840,7 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
     {
       int res = do_lookup_x (undef_name, new_hash, &old_hash, *ref,
 			     &current_value, *scope, start, version, flags,
-			     skip_map, type_class, undef_map);
+			     skip_map, type_class, undef_map, looker);
       if (res > 0)
 	break;
 
@@ -888,7 +915,7 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
 			      && ELFW(ST_TYPE) ((*ref)->st_info) == STT_OBJECT
 			      && type_class == ELF_RTYPE_CLASS_EXTERN_PROTECTED_DATA)
 			     ? ELF_RTYPE_CLASS_EXTERN_PROTECTED_DATA
-			     : ELF_RTYPE_CLASS_PLT, NULL) != 0)
+			     : ELF_RTYPE_CLASS_PLT, NULL, looker) != 0)
 	      break;
 
 	  if (protected_value.s != NULL && protected_value.m != undef_map)
@@ -911,10 +938,10 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
       && add_dependency (undef_map, current_value.m, flags) < 0)
       /* Something went wrong.  Perhaps the object we tried to reference
 	 was just removed.  Try finding another definition.  */
-      return _dl_lookup_symbol_x (undef_name, undef_map, ref,
+      return _dl_lookup_symbol_x_with_looker (undef_name, undef_map, ref,
 				  (flags & DL_LOOKUP_GSCOPE_LOCK)
 				  ? undef_map->l_scope : symbol_scope,
-				  version, type_class, flags, skip_map);
+				  version, type_class, flags, skip_map, looker);
 
   /* The object is used.  */
   if (__glibc_unlikely (current_value.m->l_used == 0))
@@ -923,12 +950,21 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
   if (__glibc_unlikely (GLRO(dl_debug_mask)
 			& (DL_DEBUG_BINDINGS|DL_DEBUG_PRELINK)))
     _dl_debug_bindings (undef_name, undef_map, ref,
-			&current_value, version, type_class, protected);
+			&current_value, version, type_class, protected, looker);
 
   *ref = current_value.s;
   return LOOKUP_VALUE (current_value.m);
 }
 
+lookup_t
+_dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
+		     const ElfW(Sym) **ref,
+		     struct r_scope_elem *symbol_scope[],
+		     const struct r_found_version *version,
+		     int type_class, int flags, struct link_map *skip_map)
+{
+	return _dl_lookup_symbol_x_with_looker(undef_name, undef_map, ref, symbol_scope, version, type_class, flags, skip_map, NULL);
+}
 
 /* Cache the location of MAP's hash table.  */
 
@@ -975,17 +1011,19 @@ static void
 _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
 		    const ElfW(Sym) **ref, struct sym_val *value,
 		    const struct r_found_version *version, int type_class,
-		    int protected)
+		    int protected, struct link_map *looker)
 {
   const char *reference_name = undef_map->l_name;
 
   if (GLRO(dl_debug_mask) & DL_DEBUG_BINDINGS)
     {
-      _dl_debug_printf ("binding file %s [%lu] to %s [%lu]: %s symbol `%s'",
+      _dl_debug_printf ("binding file %s [%lu, (ZZZ) l_ns_inner = %lu] to %s [%lu, (ZZZ) l_ns_inner = %lu]: %s symbol `%s'",
 			DSO_FILENAME (reference_name),
 			undef_map->l_ns,
+			undef_map->l_ns_inner,
 			DSO_FILENAME (value->m->l_name),
 			value->m->l_ns,
+			value->m->l_ns_inner,
 			protected ? "protected" : "normal", undef_name);
       if (version)
 	_dl_debug_printf_c (" [%s]\n", version->name);
@@ -1022,7 +1060,7 @@ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
 	  GL(dl_ns)[LM_ID_BASE]._ns_unique_sym_table.entries = NULL;
 	  do_lookup_x (undef_name, new_hash, &old_hash, *ref, &val,
 		       undef_map->l_local_scope[0], 0, version, 0, NULL,
-		       type_class, undef_map);
+		       type_class, undef_map, looker);
 	  if (val.s != value->s || val.m != value->m)
 	    conflict = 1;
 	  else if (__glibc_unlikely (undef_map->l_symbolic_in_local_scope)
@@ -1050,7 +1088,7 @@ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
 				    &val2,
 				    &scope->r_list[n]->l_symbolic_searchlist,
 				    0, version, 0, NULL, type_class,
-				    undef_map) > 0)
+				    undef_map, looker) > 0)
 		  {
 		    conflict = 1;
 		    val = val2;

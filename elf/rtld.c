@@ -279,13 +279,16 @@ struct rtld_global_ro _rtld_global_ro attribute_relro =
     /* Function pointers.  */
     ._dl_debug_printf = _dl_debug_printf,
     ._dl_mcount = _dl_mcount,
+    ._dl_lookup_symbol_x_with_looker = _dl_lookup_symbol_x_with_looker,
     ._dl_lookup_symbol_x = _dl_lookup_symbol_x,
     ._dl_open = _dl_open,
     ._dl_close = _dl_close,
     ._dl_tls_get_addr_soft = _dl_tls_get_addr_soft,
 #ifdef HAVE_DL_DISCOVER_OSVERSION
-    ._dl_discover_osversion = _dl_discover_osversion
+    ._dl_discover_osversion = _dl_discover_osversion,
 #endif
+	._dl_zzz_get_new_inner_nsid = _dl_zzz_get_new_inner_nsid,
+	._dl_zzz_add_to_universals = _dl_zzz_add_to_universals,
   };
 /* If we would use strong_alias here the compiler would see a
    non-hidden definition.  This would undo the effect of the previous
@@ -601,7 +604,7 @@ dlmopen_doit (void *a)
 			(RTLD_LAZY | __RTLD_DLOPEN | __RTLD_AUDIT
 			 | __RTLD_SECURE),
 			dl_main, LM_ID_NEWLM, _dl_argc, _dl_argv,
-			__environ);
+			__environ, -1L);
 }
 
 static void
@@ -862,6 +865,37 @@ handle_ld_preload (const char *preloadlist, struct link_map *main_map)
     }
   return npreloads;
 }
+
+static const char *
+zzz_get_universal_root(const char * ldso_path) {
+  const char * root = NULL;
+
+  int len = strlen(ldso_path);
+  for (int i = len - 1;i >= 0; i --) {
+    if (ldso_path[i] == '/') {
+      root = calloc(i + 1, sizeof(char));
+      memcpy(root, ldso_path, i);
+      break;
+    }
+  }
+  return root;
+}
+
+static const char *
+zzz_prepend_universal_root(const char * library_path) {
+	int univ_len = strlen(GLRO(dl_zzz_universal_root));
+	int old_len = strlen(library_path);
+	int new_len = univ_len + 1 + old_len;
+
+	char * path = calloc(new_len + 1, sizeof(char));
+
+	memcpy(path, GLRO(dl_zzz_universal_root), univ_len);
+	path[univ_len] = ':';
+	memcpy(path + univ_len + 1, library_path, old_len);
+
+	return path;
+}
+
 
 static void
 dl_main (const ElfW(Phdr) *phdr,
@@ -1322,6 +1356,53 @@ ERROR: '%s': cannot process note segment.\n", _dl_argv[0]);
 #ifdef DL_SYSDEP_OSCHECK
   DL_SYSDEP_OSCHECK (_dl_fatal_printf);
 #endif
+
+  /*
+   * ZZZ: Inferring the universal path from ld.so path
+   */
+  if (GL(dl_rtld_map).l_name) {
+   GLRO(dl_zzz_universal_root) = zzz_get_universal_root(GL(dl_rtld_map).l_name);
+  } else {
+	GLRO(dl_zzz_universal_root) = zzz_get_universal_root(GL(dl_rtld_map).l_libname->name);
+  }
+  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+    _dl_debug_printf ("(ZZZ) universal root is: %s\n", GLRO(dl_zzz_universal_root));
+
+  /*
+   * ZZZ: Prepending universal root to library_path (i.e., LD_LIBRARY_PATH in most cases).
+   *
+   * Rationale: all of glibc DSO's have to be built together, or it will cause a segfault. So,
+   * when using this ld.so, we need to make sure that libc.so, libdl.so, libcrypt.so, etc are
+   * also loaded from this build. Notice that not all of glibc DSO's are needed by the program,
+   * e.g. kinetic, but they may later be loaded by libpython.so or its dependencies. Since we
+   * are sure that all glibc DSO's have to be loaded from the same build, we should somehow
+   * enforce that.
+   *
+   * The most obvious way to achieve this would be adding ld.so's directory to LD_LIBRARY_PATH,
+   * and this indeed would work. However, this will also affect every single program run in the
+   * same shell, and this is obviously not desirable.
+   *
+   * Another tempting route could be adding ld.so's directory to RPATH or RUNPATH. I'm trying
+   * to avoid RPATH as its usage is already deprecated. And the issue with RUNPATH is that it
+   * does NOT take precedence over LD_LIBRARY_PATH. So, if a directory on LD_LIBRARY_PATH has
+   * glibc DSO's, it will cause weird crashes.
+   *
+   * So, I decided to prepend the current ld.so's path to library_path so that this directory
+   * is always the first directory searched for a DSO. This will not work if someone uses RPATH
+   * instead of RUNPATH to point to a directory containing a glibc DSO. This, however, is not
+   * the case at the time of writing this comment (except for kinetic itself) and hopefully
+   * won't happen since the use of RPATH is deprecated.
+   *
+   * Also, please note that we should keep the parent directory of ld.so as small as possible
+   * as it will override every other path. Currently, it only contains glibc DSO's as well as
+   * zzz_conda3's libstdc++.so which is the more recent version of our gcc's libstdc++.so. I'm
+   * not aware of any other usecase for putting something in that directory.
+   *
+   */
+  library_path = zzz_prepend_universal_root(library_path);
+  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+    _dl_debug_printf ("(ZZZ) prepending universal root to library path: %s\n",library_path);
+
 
   /* Initialize the data structures for the search paths for shared
      objects.  */

@@ -76,6 +76,7 @@ static struct link_map _dl_main_map =
   {
     .l_name = (char *) "",
     .l_real = &_dl_main_map,
+    .l_ns_inner = 0,
     .l_ns = LM_ID_BASE,
     .l_libname = &(struct libname_list) { .name = "", .dont_free = 1 },
     .l_searchlist =

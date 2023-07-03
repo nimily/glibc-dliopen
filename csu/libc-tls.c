@@ -52,9 +52,42 @@ bool _dl_tls_dtv_gaps;
 struct dtv_slotinfo_list *_dl_tls_dtv_slotinfo_list;
 /* Number of modules in the static TLS block.  */
 size_t _dl_tls_static_nelem;
+
+/*
+ * ZZZ: increasing static TLS block surplus by a factor of 4.
+ *
+ * Rationale: static TLS block is a contiguous block of memory for each
+ * thread reserved at startup time. If a library loaded through dlopen or
+ * other such functions require static thread-local storage, the surplus
+ * will be used to for that reason. Since we are going to dlopen/dliopen
+ * python and python will load a bunch of libraries, we need to make sure
+ * this surplus is increased, or we will hit segfaults.
+ *
+ * But how much extra do we need to be safe? When we run python as a separate
+ * process, it will reserve some amount by default plus this surplus. Modules
+ * loaded in python have to be loaded through dlopen and as such, python has
+ * no way to reserve any memory for them in advance. What this means is that
+ * the only way for python to not crash for this reason is to assume that its
+ * modules won't require more memory than its original amount. Assuming that
+ * python doesn't crash when we import modules (which is the case when we use
+ * python in eis and other places), we only need to add python's explicitly
+ * requested amount plus the surplus. Which this much additional memory we are
+ * guaranteed to be safe.
+ *
+ * At the time of writing this comment, the amount that python requests is
+ * actually zero! So, doubling `_dl_tls_static_size` should be perfectly fine.
+ * I make it four times bigger to reduce that chance of disaster even in cases
+ * where python crashes as kinetic is more critical for us.
+ *
+ * Notice that this amount will be reserved for every thread. However, since
+ * we typically have very few threads, there is no reason to be worries about
+ * the additional memory.
+ *
+ */
+
 /* Size of the static TLS block.  Giving this initialized value
    preallocates some surplus bytes in the static TLS area.  */
-size_t _dl_tls_static_size = 2048;
+size_t _dl_tls_static_size = 2048 << 2;
 /* Size actually allocated in the static TLS block.  */
 size_t _dl_tls_static_used;
 /* Alignment requirement of the static TLS block.  */

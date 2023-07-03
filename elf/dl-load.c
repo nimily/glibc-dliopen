@@ -862,7 +862,7 @@ struct link_map *
 _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 			struct filebuf *fbp, char *realname,
 			struct link_map *loader, int l_type, int mode,
-			void **stack_endp, Lmid_t nsid)
+			void **stack_endp, Lmid_t nsid, Lmid_t nsid_inner)
 {
   struct link_map *l = NULL;
   const ElfW(Ehdr) *header;
@@ -889,7 +889,10 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
     }
 
   /* Look again to see if the real name matched another already loaded.  */
-  for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next)
+  for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next) {
+	if ((nsid_inner != l -> l_ns_inner) && (strlen(name) != 0)) {
+		continue;
+	}
     if (!l->l_removed && _dl_file_id_match_p (&l->l_file_id, &id))
       {
 	/* The object is already loaded.
@@ -903,6 +906,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 
 	return l;
       }
+  }
 
 #ifdef SHARED
   /* When loading into a namespace other than the base one we must
@@ -913,7 +917,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
     {
       /* This is indeed ld.so.  Create a new link_map which refers to
 	 the real one for almost everything.  */
-      l = _dl_new_object (realname, name, l_type, loader, mode, nsid);
+      l = _dl_new_object_with_nsid_inner (realname, name, l_type, loader, mode, nsid, nsid_inner);
       if (l == NULL)
 	goto fail_new;
 
@@ -942,7 +946,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 
   /* Print debugging message.  */
   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
-    _dl_debug_printf ("file=%s [%lu];  generating link map\n", name, nsid);
+    _dl_debug_printf ("file=%s [%lu,%lu];  generating link map\n", name, nsid, nsid_inner);
 
   /* This is the ELF header.  We read it in `open_verify'.  */
   header = (void *) fbp->buf;
@@ -998,7 +1002,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
     assert (r->r_state == RT_ADD);
 
   /* Enter the new object in the list of loaded objects.  */
-  l = _dl_new_object (realname, name, l_type, loader, mode, nsid);
+  l = _dl_new_object_with_nsid_inner (realname, name, l_type, loader, mode, nsid, nsid_inner);
   if (__glibc_unlikely (l == NULL))
     {
 #ifdef SHARED
@@ -1918,9 +1922,9 @@ open_path (const char *name, size_t namelen, int mode,
 
 /* Map in the shared object file NAME.  */
 
-struct link_map *
-_dl_map_object (struct link_map *loader, const char *name,
-		int type, int trace_mode, int mode, Lmid_t nsid)
+static struct link_map *
+_dl_map_object_real (struct link_map *loader, const char *name,
+		int type, int trace_mode, int mode, Lmid_t nsid, Lmid_t nsid_inner)
 {
   int fd;
   const char *origname = NULL;
@@ -1928,6 +1932,15 @@ _dl_map_object (struct link_map *loader, const char *name,
   char *name_copy;
   struct link_map *l;
   struct filebuf fb;
+  int noname = (name == NULL);
+
+  if (nsid_inner == -1L) {
+	if (loader == NULL) {
+      nsid_inner = 0L;
+	} else {
+      nsid_inner = loader -> l_ns_inner;
+	}
+  }
 
   assert (nsid >= 0);
   assert (nsid < GL(dl_nns));
@@ -1939,6 +1952,8 @@ _dl_map_object (struct link_map *loader, const char *name,
 	 use that object.  Elide this check for names that have not
 	 yet been opened.  */
       if (__glibc_unlikely ((l->l_faked | l->l_removed) != 0))
+	continue;
+	  if ((nsid_inner != l -> l_ns_inner) && (strlen(name) != 0) && (_dl_zzz_is_universal_map(l) == false))
 	continue;
       if (!_dl_name_match_p (name, l))
 	{
@@ -1966,9 +1981,9 @@ _dl_map_object (struct link_map *loader, const char *name,
   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES)
       && loader != NULL)
     _dl_debug_printf ((mode & __RTLD_CALLMAP) == 0
-		      ? "\nfile=%s [%lu];  needed by %s [%lu]\n"
-		      : "\nfile=%s [%lu];  dynamically loaded by %s [%lu]\n",
-		      name, nsid, DSO_FILENAME (loader->l_name), loader->l_ns);
+		      ? "\nfile=%s [%lu,%lu];  needed by %s [%lu,%lu]\n"
+		      : "\nfile=%s [%lu,%lu];  dynamically loaded by %s [%lu,%lu]\n",
+		      name, nsid, nsid_inner, DSO_FILENAME (loader->l_name), loader->l_ns, loader -> l_ns_inner);
 
 #ifdef SHARED
   /* Give the auditing libraries a chance to change the name before we
@@ -2195,8 +2210,8 @@ _dl_map_object (struct link_map *loader, const char *name,
 
 	  /* Allocate a new object map.  */
 	  if ((name_copy = __strdup (name)) == NULL
-	      || (l = _dl_new_object (name_copy, name, type, loader,
-				      mode, nsid)) == NULL)
+	      || (l = _dl_new_object_with_nsid_inner (name_copy, name, type, loader,
+				      mode, nsid, nsid_inner)) == NULL)
 	    {
 	      free (name_copy);
 	      _dl_signal_error (ENOMEM, name, NULL,
@@ -2228,7 +2243,31 @@ _dl_map_object (struct link_map *loader, const char *name,
 
   void *stack_end = __libc_stack_end;
   return _dl_map_object_from_fd (name, origname, fd, &fb, realname, loader,
-				 type, mode, &stack_end, nsid);
+				 type, mode, &stack_end, nsid, nsid_inner);
+}
+
+/*
+ * ZZZ: loads a DSO with `nsid_inner` as its inner namespace id.
+ *
+ * If `nsid_inner >= 0`, the number will be used directly. However, except within a `dliopen`
+ * invocation, this will be `-1L` to indicate the loader's `l_ns_inner` must be used. This is
+ * the "inheriting" behavior I talked about in the comment above `dliopen`'s definition.
+ *
+ */
+struct link_map *
+_dl_map_object_with_nsid_inner (struct link_map *loader, const char *name,
+		int type, int trace_mode, int mode, Lmid_t nsid, Lmid_t nsid_inner)
+{
+	struct link_map * obj =  _dl_map_object_real (loader, name, type, trace_mode, mode, nsid, nsid_inner);
+	_dl_zzz_add_to_universals(obj);
+	return obj;
+}
+
+struct link_map *
+_dl_map_object (struct link_map *loader, const char *name,
+		int type, int trace_mode, int mode, Lmid_t nsid)
+{
+	return _dl_map_object_with_nsid_inner (loader, name, type, trace_mode, mode, nsid, -1L);
 }
 
 struct add_path_state

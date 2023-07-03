@@ -36,13 +36,13 @@ find_needed (const char *name, struct link_map *map)
 
   for (tmap = GL(dl_ns)[map->l_ns]._ns_loaded; tmap != NULL;
        tmap = tmap->l_next)
-    if (_dl_name_match_p (name, tmap))
+    if (_dl_name_match_p (name, tmap) && _dl_zzz_has_visibility(map, tmap))
       return tmap;
 
   /* The required object is not in the global scope, look to see if it is
      a dependency of the current object.  */
   for (n = 0; n < map->l_searchlist.r_nlist; n++)
-    if (_dl_name_match_p (name, map->l_searchlist.r_list[n]))
+    if (_dl_name_match_p (name, map->l_searchlist.r_list[n]) && _dl_zzz_has_visibility(map, map->l_searchlist.r_list[n]))
       return map->l_searchlist.r_list[n];
 
   /* Should never happen.  */

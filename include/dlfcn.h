@@ -119,15 +119,21 @@ struct dlfcn_hook
 		  void **extra_info, int flags);
   int (*dlinfo) (void *handle, int request, void *arg, void *dl_caller);
   void *(*dlmopen) (Lmid_t nsid, const char *file, int mode, void *dl_caller);
+  void *(*dlopen_with_args) (const char *file, int mode, Lmid_t nsid_inner, void *dl_caller);
+  void *(*dliopen) (const char *file, int mode, void *dl_caller);
   void *pad[4];
 };
 
 extern struct dlfcn_hook *_dlfcn_hook;
 libdl_hidden_proto (_dlfcn_hook)
 
+extern void *__dlopen_with_args (const char *file, int mode, Lmid_t nsid_inner, void * caller)
+     attribute_hidden;
 extern void *__dlopen (const char *file, int mode DL_CALLER_DECL)
      attribute_hidden;
 extern void *__dlmopen (Lmid_t nsid, const char *file, int mode DL_CALLER_DECL)
+     attribute_hidden;
+extern void *__dliopen (const char *file, int mode, void *)
      attribute_hidden;
 extern int __dlclose (void *handle)
      attribute_hidden;

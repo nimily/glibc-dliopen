@@ -148,8 +148,8 @@ RTLD_NEXT used in code not dynamically loaded"));
     {
       /* Search the scope of the given object.  */
       struct link_map *map = handle;
-      result = GLRO(dl_lookup_symbol_x) (name, map, &ref, map->l_local_scope,
-					 vers, 0, flags, NULL);
+      result = GLRO(dl_lookup_symbol_x_with_looker) (name, map, &ref, map->l_local_scope,
+					 vers, 0, flags, NULL, match);
     }
 
   if (ref != NULL)
